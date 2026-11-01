@@ -1,9 +1,14 @@
-"""Vista inicial del jardín. Ejecutar con: python interfaz.py."""
+"""Ventana del Robot Jardinero: configuración, búsqueda y animación.
+
+Ejecutar con: python interfaz.py
+"""
 
 import tkinter as tk
 from tkinter import messagebox, ttk
 
+from busqueda import resolver
 from jardin import COLUMNAS, FILAS, TOTAL_PLANTAS, generar_jardin
+from modelo import Escenario, simular_plan
 
 
 TAMANO_CELDA = 60
@@ -12,7 +17,7 @@ CAPACIDAD_TANQUE = 3
 
 
 class AplicacionJardin:
-    """Muestra un mapa fijo hasta que se pulsa Generar mapa."""
+    """Muestra un mapa fijo hasta que se pulsa Generar mapa; resuelve y anima el plan."""
 
     def __init__(self, ventana):
         self.ventana = ventana
@@ -29,6 +34,13 @@ class AplicacionJardin:
         self.agua_tanque = tk.IntVar(value=3)
         self.nivel_tanque = tk.StringVar()
         self.resumen = tk.StringVar()
+        self.resultados = tk.StringVar(value="Sin resultados. Pulsa Resolver.")
+
+        # Plan actual y animación.
+        self.resultado = None          # Resultado de la última búsqueda con solución
+        self.trayectoria = []          # estados del plan, incluido el inicial
+        self.paso = 0                  # posición actual dentro de la trayectoria
+        self.trabajo_animacion = None  # identificador del after de la animación
 
         contenido = ttk.Frame(ventana, padding=16)
         contenido.grid()
@@ -52,6 +64,15 @@ class AplicacionJardin:
             controles, text="Generar mapa", command=self.nuevo_mapa
         )
         boton_generar.grid(row=0, column=3, padx=8)
+        boton_resolver = ttk.Button(
+            controles, text="Resolver", command=self.resolver_plan
+        )
+        boton_resolver.grid(row=0, column=4, padx=4)
+        self.boton_repetir = ttk.Button(
+            controles, text="Repetir animación", command=self.iniciar_animacion,
+            state="disabled",
+        )
+        self.boton_repetir.grid(row=0, column=5, padx=4)
 
         ancho_jardin = COLUMNAS * TAMANO_CELDA + 2 * MARGEN
         alto_jardin = FILAS * TAMANO_CELDA + 2 * MARGEN
@@ -64,7 +85,7 @@ class AplicacionJardin:
         leyenda = ttk.Label(
             contenido,
             text="N: normal (1)   S: sedienta (2)   B: base   L: llave\n"
-                 "Gris: obstáculo   R: robot en la base   Plantas: todas secas",
+                 "Gris: obstáculo   Círculo azul con R: robot   Verde: planta regada",
             justify="left",
         )
         leyenda.grid(row=3, column=0, sticky="w", pady=(10, 4))
@@ -76,7 +97,7 @@ class AplicacionJardin:
         self.actualizar_configuracion()
 
     def crear_panel_configuracion(self, contenido):
-        """Agrupa las entradas sin cambiar la distribución del jardín."""
+        """Agrupa las entradas y los resultados sin cambiar la distribución del jardín."""
         panel = ttk.LabelFrame(contenido, text="Configuración", padding=12)
         panel.grid(row=1, column=1, rowspan=4, sticky="n", padx=(16, 0), pady=12)
         etiqueta_agua = ttk.Label(panel, text="Agua inicial (unidades):")
@@ -86,7 +107,7 @@ class AplicacionJardin:
             state="readonly", width=20,
         )
         self.selector_agua.grid(row=1, column=0, sticky="ew", pady=(4, 12))
-        self.selector_agua.bind("<<ComboboxSelected>>", self.actualizar_configuracion)
+        self.selector_agua.bind("<<ComboboxSelected>>", self.cambio_configuracion)
         etiqueta_meta = ttk.Label(panel, text="Agua requerida en la meta:")
         etiqueta_meta.grid(row=2, column=0, sticky="w")
         self.selector_meta = ttk.Combobox(
@@ -94,7 +115,7 @@ class AplicacionJardin:
             state="readonly", width=20,
         )
         self.selector_meta.grid(row=3, column=0, sticky="ew", pady=(4, 12))
-        self.selector_meta.bind("<<ComboboxSelected>>", self.actualizar_configuracion)
+        self.selector_meta.bind("<<ComboboxSelected>>", self.cambio_configuracion)
         etiqueta_velocidad = ttk.Label(panel, text="Velocidad de animación:")
         etiqueta_velocidad.grid(row=4, column=0, sticky="w")
         self.selector_velocidad = ttk.Combobox(
@@ -103,7 +124,7 @@ class AplicacionJardin:
         )
         self.selector_velocidad.grid(row=5, column=0, sticky="ew", pady=(4, 12))
         self.selector_velocidad.bind("<<ComboboxSelected>>", self.actualizar_configuracion)
-        etiqueta_tanque = ttk.Label(panel, text="Tanque al inicio:")
+        etiqueta_tanque = ttk.Label(panel, text="Tanque:")
         etiqueta_tanque.grid(row=6, column=0, sticky="w")
         self.barra_tanque = ttk.Progressbar(
             panel, variable=self.agua_tanque, maximum=CAPACIDAD_TANQUE,
@@ -122,14 +143,19 @@ class AplicacionJardin:
             panel, textvariable=self.resumen, justify="left", wraplength=220
         )
         etiqueta_resumen.grid(row=11, column=0, sticky="w", pady=6)
-        aviso = ttk.Label(
-            panel, text="La velocidad se aplicará cuando se integre la animación.",
-            wraplength=220, justify="left",
+        separador_resultados = ttk.Separator(panel)
+        separador_resultados.grid(row=12, column=0, sticky="ew", pady=12)
+        titulo_resultados = ttk.Label(
+            panel, text="Resultados de la búsqueda", font=("Arial", 10, "bold")
         )
-        aviso.grid(row=12, column=0, sticky="w", pady=(8, 0))
+        titulo_resultados.grid(row=13, column=0, sticky="w")
+        etiqueta_resultados = ttk.Label(
+            panel, textvariable=self.resultados, justify="left", wraplength=220
+        )
+        etiqueta_resultados.grid(row=14, column=0, sticky="w", pady=6)
 
     def obtener_configuracion(self):
-        """Devuelve valores simples para conectar después el modelo y la animación."""
+        """Devuelve valores simples para conectar el modelo y la animación."""
 
         meta_elegida = self.meta_agua.get()
         if meta_elegida == "Lleno":
@@ -137,7 +163,7 @@ class AplicacionJardin:
         elif meta_elegida == "Vacío":
             agua_final = 0
         else:
-            agua_final = None 
+            agua_final = None
 
         velocidad_elegida = self.velocidad.get()
         if velocidad_elegida == "Lenta":
@@ -153,12 +179,18 @@ class AplicacionJardin:
         configuracion["intervalo_ms"] = intervalo
         return configuracion
 
+    def cambio_configuracion(self, evento=None):
+        """Agua inicial o final: el plan calculado deja de ser válido."""
+        self.invalidar_plan()
+        self.actualizar_configuracion()
+        self.estado.set("Configuración cambiada. Pulsa Resolver para calcular un plan.")
+
     def actualizar_configuracion(self, evento=None):
-        """Actualiza la vista del inicio; no mueve al robot ni regenera el mapa."""
-        configuracion = self.obtener_configuracion()
-        agua = configuracion["agua_inicial"]
-        self.agua_tanque.set(agua)
-        self.nivel_tanque.set(f"{agua} / {CAPACIDAD_TANQUE} unidades")
+        """Actualiza el tanque y el resumen; no mueve al robot ni regenera el mapa."""
+        agua = self.obtener_configuracion()["agua_inicial"]
+        if not self.trayectoria:
+            self.agua_tanque.set(agua)
+            self.nivel_tanque.set(f"{agua} / {CAPACIDAD_TANQUE} unidades")
         self.actualizar_resumen()
 
     def actualizar_resumen(self):
@@ -200,21 +232,131 @@ class AplicacionJardin:
             messagebox.showerror("No se pudo generar el jardín", str(error), parent=self.ventana)
             return
         self.jardin = nuevo
-        self.dibujar_jardin()
+        self.invalidar_plan()
         cantidad = self.contar_sedientas()
         self.estado.set(
-            f"Mapa actual: {cantidad} sedientas y {TOTAL_PLANTAS - cantidad} normales."
+            f"Mapa actual: {cantidad} sedientas y {TOTAL_PLANTAS - cantidad} normales. "
+            "Pulsa Resolver."
         )
         self.actualizar_resumen()
 
-    def dibujar_jardin(self):
-        """Dibuja cada celda y, al final, el robot sobre la base."""
+    # ------------------------------------------------------------------
+    # Búsqueda
+    # ------------------------------------------------------------------
+
+    def invalidar_plan(self):
+        """Descarta el plan, detiene la animación y muestra el estado inicial."""
+        self.detener_animacion()
+        self.resultado = None
+        self.trayectoria = []
+        self.paso = 0
+        self.resultados.set("Sin resultados. Pulsa Resolver.")
+        self.boton_repetir.state(["disabled"])
+        self.mostrar_estado(None)
+
+    def resolver_plan(self):
+        """Busca el plan con IDA* y, si existe, lo anima."""
+        self.invalidar_plan()
+        configuracion = self.obtener_configuracion()
+        escenario = Escenario(
+            self.jardin, configuracion["agua_inicial"], configuracion["agua_final"]
+        )
+        self.estado.set("Calculando el plan...")
+        self.resultados.set("Calculando...")
+        self.ventana.update_idletasks()   # muestra el aviso antes de buscar
+        resultado = resolver(escenario)
+
+        if not resultado.hay_solucion:
+            self.estado.set(resultado.mensaje)
+            self.resultados.set(
+                f"{resultado.mensaje}\n"
+                f"Estados alcanzables revisados: {resultado.nodos_expandidos}\n"
+                f"Tiempo de búsqueda: {resultado.tiempo:.3f} s"
+            )
+            return
+
+        self.resultado = resultado
+        self.trayectoria = simular_plan(escenario, resultado.plan)
+        self.resultados.set(
+            f"Costo total: {resultado.costo}\n"
+            f"  Movimientos: {resultado.movimientos}\n"
+            f"  Riegos: {resultado.riegos}\n"
+            f"  Rellenos: {resultado.rellenos}\n"
+            f"Nodos expandidos: {resultado.nodos_expandidos}\n"
+            f"Tiempo de búsqueda: {resultado.tiempo:.3f} s\n"
+            f"Plantas regadas: {resultado.plantas_regadas} de {TOTAL_PLANTAS}\n"
+            f"Agua consumida: {resultado.agua_consumida}\n"
+            f"Agua restante: {resultado.agua_restante}\n"
+            f"Agua desperdiciada: {resultado.agua_desperdiciada}\n"
+            f"Meta cumplida: {'sí' if resultado.meta_cumplida else 'no'}"
+        )
+        self.boton_repetir.state(["!disabled"])
+        self.iniciar_animacion()
+
+    # ------------------------------------------------------------------
+    # Animación
+    # ------------------------------------------------------------------
+
+    def iniciar_animacion(self):
+        """Reproduce el plan desde el estado inicial (sirve también para repetir)."""
+        if not self.trayectoria:
+            return
+        self.detener_animacion()
+        self.paso = 0
+        self.mostrar_estado(self.trayectoria[0])
+        self.estado.set(f"Plan encontrado: {self.resultado.costo} acciones.")
+        self.trabajo_animacion = self.ventana.after(
+            self.obtener_configuracion()["intervalo_ms"], self.avanzar_animacion
+        )
+
+    def detener_animacion(self):
+        if self.trabajo_animacion is not None:
+            self.ventana.after_cancel(self.trabajo_animacion)
+            self.trabajo_animacion = None
+
+    def avanzar_animacion(self):
+        """Muestra el siguiente estado del plan calculado por la búsqueda."""
+        self.trabajo_animacion = None
+        plan = self.resultado.plan
+        self.paso += 1
+        self.mostrar_estado(self.trayectoria[self.paso])
+        if self.paso < len(plan):
+            self.estado.set(f"Paso {self.paso} de {len(plan)}: {plan[self.paso - 1]}")
+            self.trabajo_animacion = self.ventana.after(
+                self.obtener_configuracion()["intervalo_ms"], self.avanzar_animacion
+            )
+        else:
+            self.estado.set(
+                f"Plan completado en {len(plan)} acciones. "
+                "Las cinco plantas están regadas y el robot volvió a la base."
+            )
+
+    # ------------------------------------------------------------------
+    # Dibujo
+    # ------------------------------------------------------------------
+
+    def mostrar_estado(self, estado):
+        """Dibuja el jardín y el tanque para un estado del modelo.
+
+        Con estado None se muestra el inicio: robot en la base, plantas secas y
+        el agua inicial elegida.
+        """
+        if estado is None:
+            agua = int(self.agua_inicial.get())
+        else:
+            agua = estado.agua
+        self.agua_tanque.set(agua)
+        self.nivel_tanque.set(f"{agua} / {CAPACIDAD_TANQUE} unidades")
+        self.dibujar_jardin(estado)
+
+    def dibujar_jardin(self, estado=None):
+        """Dibuja cada celda y, al final, el robot en su posición actual."""
         if self.jardin is None:
             return
         self.lienzo.delete("all")
         plantas = {}
-        for planta in self.jardin.plantas:
-            plantas[planta.posicion] = planta
+        for indice, planta in enumerate(self.jardin.plantas):
+            plantas[planta.posicion] = (indice, planta)
         for indice in range(COLUMNAS):
             self.lienzo.create_text(
                 MARGEN + (indice + 0.5) * TAMANO_CELDA, MARGEN / 2, text=str(indice)
@@ -227,16 +369,19 @@ class AplicacionJardin:
                 posicion = (fila, columna)
                 color = "#edf5e8"
                 etiqueta = ""
+                regada = False
                 if posicion in self.jardin.obstaculos:
                     color = "#667085"
                 elif posicion in plantas:
-                    planta = plantas[posicion]
-                    if planta.agua_necesaria == 2:
+                    indice, planta = plantas[posicion]
+                    regada = estado is not None and estado.regadas[indice]
+                    if regada:
+                        color = "#8fd19e"
+                    elif planta.agua_necesaria == 2:
                         color = "#f8b66a"
-                        etiqueta = "S"
                     else:
                         color = "#f6dc91"
-                        etiqueta = "N"
+                    etiqueta = "S" if planta.agua_necesaria == 2 else "N"
                 elif posicion == self.jardin.base:
                     color = "#b9d7ff"
                     etiqueta = "B"
@@ -254,7 +399,12 @@ class AplicacionJardin:
                         x + TAMANO_CELDA / 2, y + 13,
                         text=etiqueta, font=("Arial", 12, "bold"), tags="elemento",
                     )
-        fila, columna = self.jardin.base
+                if regada:
+                    self.lienzo.create_text(
+                        x + TAMANO_CELDA / 2, y + TAMANO_CELDA - 8,
+                        text="regada", font=("Arial", 8), tags="elemento",
+                    )
+        fila, columna = self.jardin.base if estado is None else estado.posicion
         x = MARGEN + columna * TAMANO_CELDA
         y = MARGEN + fila * TAMANO_CELDA
         self.lienzo.create_oval(
