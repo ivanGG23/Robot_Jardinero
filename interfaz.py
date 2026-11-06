@@ -7,11 +7,15 @@ import tkinter as tk
 from tkinter import messagebox, ttk
 
 from busqueda import resolver
-from jardin import COLUMNAS, FILAS, TOTAL_PLANTAS, generar_jardin
+from jardin import (
+    COLUMNAS, FILAS, MAX_LADO, MIN_LADO, TOTAL_PLANTAS, generar_jardin,
+)
 from modelo import Escenario, simular_plan
 
 
-TAMANO_CELDA = 60
+TAMANO_CELDA = 60          # tamaño máximo de celda (se reduce en mapas grandes)
+TAMANO_MINIMO_CELDA = 24
+LADO_MAXIMO_PIXELES = 600  # lo que puede medir el jardín en pantalla
 MARGEN = 30
 CAPACIDAD_TANQUE = 3
 
@@ -27,6 +31,9 @@ class AplicacionJardin:
         self.jardin = None
         self.sedientas = tk.StringVar(value="2")
         self.normales = tk.StringVar()
+        self.filas_var = tk.StringVar(value=str(FILAS))
+        self.columnas_var = tk.StringVar(value=str(COLUMNAS))
+        self.tamano_celda = TAMANO_CELDA
         self.estado = tk.StringVar()
         self.agua_inicial = tk.StringVar(value="3")
         self.meta_agua = tk.StringVar(value="Cualquier nivel")
@@ -73,6 +80,26 @@ class AplicacionJardin:
             state="disabled",
         )
         self.boton_repetir.grid(row=0, column=5, padx=4)
+
+        # Segunda fila: dimensiones del jardín (se aplican al pulsar Generar mapa).
+        dimensiones = ttk.Frame(controles)
+        dimensiones.grid(row=1, column=0, columnspan=6, sticky="w", pady=(8, 0))
+        etiqueta_filas = ttk.Label(dimensiones, text="Filas:")
+        etiqueta_filas.grid(row=0, column=0)
+        self.selector_filas = ttk.Spinbox(
+            dimensiones, from_=MIN_LADO, to=MAX_LADO, width=4,
+            textvariable=self.filas_var, state="readonly",
+            command=self.actualizar_cantidad,
+        )
+        self.selector_filas.grid(row=0, column=1, padx=8)
+        etiqueta_columnas = ttk.Label(dimensiones, text="Columnas:")
+        etiqueta_columnas.grid(row=0, column=2)
+        self.selector_columnas = ttk.Spinbox(
+            dimensiones, from_=MIN_LADO, to=MAX_LADO, width=4,
+            textvariable=self.columnas_var, state="readonly",
+            command=self.actualizar_cantidad,
+        )
+        self.selector_columnas.grid(row=0, column=3, padx=8)
 
         ancho_jardin = COLUMNAS * TAMANO_CELDA + 2 * MARGEN
         alto_jardin = FILAS * TAMANO_CELDA + 2 * MARGEN
@@ -201,7 +228,9 @@ class AplicacionJardin:
         configuracion = self.obtener_configuracion()
         intervalo = configuracion["intervalo_ms"]
         self.resumen.set(
-            f"Mapa: {sedientas} sedientas, {TOTAL_PLANTAS - sedientas} normales.\n"
+            f"Mapa: {self.jardin.filas}x{self.jardin.columnas}, "
+            f"{len(self.jardin.obstaculos)} obstáculos.\n"
+            f"Plantas: {sedientas} sedientas, {TOTAL_PLANTAS - sedientas} normales.\n"
             f"Agua inicial: {self.agua_inicial.get()} de {CAPACIDAD_TANQUE}.\n"
             f"Meta: regar todas y volver a la base.\n"
             f"Agua final: {self.meta_agua.get()}.\n"
@@ -218,7 +247,7 @@ class AplicacionJardin:
         return cantidad
 
     def actualizar_cantidad(self, evento=None):
-        """El selector prepara la configuración; el botón la aplica al mapa."""
+        """Los selectores preparan la configuración; el botón la aplica al mapa."""
         cantidad = int(self.sedientas.get())
         self.normales.set(f"Normales: {TOTAL_PLANTAS - cantidad}")
         self.estado.set("Pulsa Generar mapa para aplicar la selección.")
@@ -227,16 +256,27 @@ class AplicacionJardin:
         """Sustituye el mapa completo por otro generado con la selección actual."""
         try:
             cantidad_elegida = int(self.sedientas.get())
-            nuevo = generar_jardin(cantidad_elegida)
+            filas = int(self.filas_var.get())
+            columnas = int(self.columnas_var.get())
+            nuevo = generar_jardin(cantidad_elegida, filas, columnas)
         except (ValueError, RuntimeError) as error:
             messagebox.showerror("No se pudo generar el jardín", str(error), parent=self.ventana)
             return
         self.jardin = nuevo
+        # Celdas más chicas en mapas grandes para que el jardín quepa en pantalla.
+        self.tamano_celda = max(
+            TAMANO_MINIMO_CELDA,
+            min(TAMANO_CELDA, LADO_MAXIMO_PIXELES // max(filas, columnas)),
+        )
+        self.lienzo.config(
+            width=columnas * self.tamano_celda + 2 * MARGEN,
+            height=filas * self.tamano_celda + 2 * MARGEN,
+        )
         self.invalidar_plan()
         cantidad = self.contar_sedientas()
         self.estado.set(
-            f"Mapa actual: {cantidad} sedientas y {TOTAL_PLANTAS - cantidad} normales. "
-            "Pulsa Resolver."
+            f"Mapa actual {filas}x{columnas}: {cantidad} sedientas y "
+            f"{TOTAL_PLANTAS - cantidad} normales. Pulsa Resolver."
         )
         self.actualizar_resumen()
 
@@ -350,22 +390,30 @@ class AplicacionJardin:
         self.dibujar_jardin(estado)
 
     def dibujar_jardin(self, estado=None):
-        """Dibuja cada celda y, al final, el robot en su posición actual."""
+        """Dibuja cada celda y, al final, el robot en su posición actual.
+
+        Usa las dimensiones del jardín actual (no las de los selectores), así
+        mover un selector sin pulsar Generar mapa no rompe el dibujo.
+        """
         if self.jardin is None:
             return
+        t = self.tamano_celda
+        filas = self.jardin.filas
+        columnas = self.jardin.columnas
+        fuente = max(7, t // 5)
         self.lienzo.delete("all")
         plantas = {}
         for indice, planta in enumerate(self.jardin.plantas):
             plantas[planta.posicion] = (indice, planta)
-        for indice in range(COLUMNAS):
+        for indice in range(columnas):
             self.lienzo.create_text(
-                MARGEN + (indice + 0.5) * TAMANO_CELDA, MARGEN / 2, text=str(indice)
+                MARGEN + (indice + 0.5) * t, MARGEN / 2, text=str(indice)
             )
-        for fila in range(FILAS):
+        for fila in range(filas):
             self.lienzo.create_text(
-                MARGEN / 2, MARGEN + (fila + 0.5) * TAMANO_CELDA, text=str(fila)
+                MARGEN / 2, MARGEN + (fila + 0.5) * t, text=str(fila)
             )
-            for columna in range(COLUMNAS):
+            for columna in range(columnas):
                 posicion = (fila, columna)
                 color = "#edf5e8"
                 etiqueta = ""
@@ -388,32 +436,32 @@ class AplicacionJardin:
                 elif posicion == self.jardin.llave:
                     color = "#90dce5"
                     etiqueta = "L"
-                x = MARGEN + columna * TAMANO_CELDA
-                y = MARGEN + fila * TAMANO_CELDA
+                x = MARGEN + columna * t
+                y = MARGEN + fila * t
                 self.lienzo.create_rectangle(
-                    x, y, x + TAMANO_CELDA, y + TAMANO_CELDA,
+                    x, y, x + t, y + t,
                     fill=color, outline="#a4b09e", tags="celda",
                 )
                 if etiqueta:
                     self.lienzo.create_text(
-                        x + TAMANO_CELDA / 2, y + 13,
-                        text=etiqueta, font=("Arial", 12, "bold"), tags="elemento",
+                        x + t / 2, y + t * 0.22,
+                        text=etiqueta, font=("Arial", fuente, "bold"), tags="elemento",
                     )
-                if regada:
+                if regada and t >= 40:
                     self.lienzo.create_text(
-                        x + TAMANO_CELDA / 2, y + TAMANO_CELDA - 8,
-                        text="regada", font=("Arial", 8), tags="elemento",
+                        x + t / 2, y + t * 0.87,
+                        text="regada", font=("Arial", max(6, t // 7)), tags="elemento",
                     )
         fila, columna = self.jardin.base if estado is None else estado.posicion
-        x = MARGEN + columna * TAMANO_CELDA
-        y = MARGEN + fila * TAMANO_CELDA
+        x = MARGEN + columna * t
+        y = MARGEN + fila * t
         self.lienzo.create_oval(
-            x + 17, y + 27, x + 43, y + 53,
+            x + t * 0.28, y + t * 0.45, x + t * 0.72, y + t * 0.88,
             fill="#3046a5", outline="white", tags="robot",
         )
         self.lienzo.create_text(
-            x + 30, y + 40, text="R", fill="white",
-            font=("Arial", 11, "bold"), tags="robot",
+            x + t / 2, y + t * 0.67, text="R", fill="white",
+            font=("Arial", fuente, "bold"), tags="robot",
         )
 
 

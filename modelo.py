@@ -6,8 +6,6 @@ funciones de este módulo, así que comparten un único modelo de transiciones.
 
 from collections import namedtuple
 
-from jardin import COLUMNAS, FILAS
-
 
 CAPACIDAD_TANQUE = 3
 
@@ -62,9 +60,10 @@ def aplicar_accion(escenario, estado, accion):
     if accion in MOVIMIENTOS:
         d_fila, d_columna = MOVIMIENTOS[accion]
         destino = (estado.posicion[0] + d_fila, estado.posicion[1] + d_columna)
-        if not (0 <= destino[0] < FILAS and 0 <= destino[1] < COLUMNAS):
+        jardin = escenario.jardin
+        if not (0 <= destino[0] < jardin.filas and 0 <= destino[1] < jardin.columnas):
             return None
-        if destino in escenario.jardin.obstaculos:
+        if destino in jardin.obstaculos:
             return None
         return Estado(destino, estado.regadas, estado.agua)
 
