@@ -1,6 +1,6 @@
 """Ventana del Robot Jardinero: configuración, búsqueda y animación.
 
-Ejecutar con: python interfaz.py
+Ejecutar con: python interfaz.py test
 """
 
 import tkinter as tk
