@@ -1,4 +1,5 @@
 """Generación del jardín; no contiene reglas de riego ni de búsqueda."""
+# /usr/bin/python "/home/ivangg/Desktop/ARCHIVOS DE LA ESCUELA/IA/Robot_Jardinero/interfaz.py"
 
 from dataclasses import dataclass
 import random
@@ -6,6 +7,8 @@ import random
 
 FILAS = 8
 COLUMNAS = 8
+MIN_LADO = 3
+MAX_LADO = 15
 TOTAL_PLANTAS = 5
 TOTAL_OBSTACULOS = 9
 Posicion = tuple[int, int]
@@ -27,14 +30,19 @@ class Jardin:
     plantas: tuple[Planta, ...]
     base: Posicion
     llave: Posicion
+    filas: int = FILAS
+    columnas: int = COLUMNAS
 
 
-def celdas_conectadas(obstaculos: frozenset[Posicion]) -> bool:
+def obstaculos_para(filas: int, columnas: int) -> int:
+    """Obstáculos escalados con el área del jardín."""
+    return round(filas * columnas * TOTAL_OBSTACULOS / (FILAS * COLUMNAS))
+
+
+def celdas_conectadas(obstaculos, filas=FILAS, columnas=COLUMNAS) -> bool:
     """Comprueba que todas las celdas libres formen un solo grupo conectado."""
     libres = {
-        (fila, columna)
-        for fila in range(FILAS)
-        for columna in range(COLUMNAS)
+        (f, c) for f in range(filas) for c in range(columnas)
     } - obstaculos
     if not libres:
         return False
@@ -58,25 +66,20 @@ def celdas_conectadas(obstaculos: frozenset[Posicion]) -> bool:
     return visitadas == libres
 
 
-def generar_jardin(cantidad_sedientas: int = 2) -> Jardin:
-    """Genera un mapa conectado con cinco plantas y nueve obstáculos.
-
-    Las coordenadas (fila, columna) van de 0 a 7. El resultado se conserva
-    durante la ejecución; generar otro jardín es una operación explícita.
-    """
+def generar_jardin(cantidad_sedientas=2, filas=FILAS, columnas=COLUMNAS) -> Jardin:
     if type(cantidad_sedientas) is not int or not 0 <= cantidad_sedientas <= 5:
         raise ValueError("La cantidad de plantas sedientas debe ser un entero de 0 a 5.")
+    if not (MIN_LADO <= filas <= MAX_LADO and MIN_LADO <= columnas <= MAX_LADO):
+        raise ValueError(f"Filas y columnas deben estar entre {MIN_LADO} y {MAX_LADO}.")
 
-    celdas = [
-        (fila, columna)
-        for fila in range(FILAS)
-        for columna in range(COLUMNAS)
-    ]
-    # Se descartan distribuciones que dejen celdas libres aisladas.
-    # El límite evita un ciclo sin fin ante un fallo inesperado.
+    total_obstaculos = obstaculos_para(filas, columnas)
+    if filas * columnas - total_obstaculos < TOTAL_PLANTAS + 2:
+        raise ValueError("El mapa es demasiado pequeño para plantas, base y llave.")
+
+    celdas = [(f, c) for f in range(filas) for c in range(columnas)]
     for _ in range(1000):
-        obstaculos = frozenset(random.sample(celdas, TOTAL_OBSTACULOS))
-        if celdas_conectadas(obstaculos):
+        obstaculos = frozenset(random.sample(celdas, total_obstaculos))
+        if celdas_conectadas(obstaculos, filas, columnas):
             break
     else:
         raise RuntimeError("No se pudo generar un mapa conectado. Intenta nuevamente.")
@@ -92,4 +95,4 @@ def generar_jardin(cantidad_sedientas: int = 2) -> Jardin:
         Planta(posicion, agua)
         for posicion, agua in zip(ubicaciones[2:], necesidades)
     )
-    return Jardin(obstaculos, plantas, base, llave)
+    return Jardin(obstaculos, plantas, base, llave, filas, columnas)
